@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>AR - Objeto anclado</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; overflow:hidden; background:#000; font-family:-apple-system,system-ui,sans-serif; color:#fff; }
+
+  #cam { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; z-index:0; background:#000; }
+  #gl  { position:fixed; inset:0; width:100%; height:100%; z-index:1; }
+
+  .cross { position:fixed; top:50%; left:50%; transform:translate(-50%,-50%); z-index:2; pointer-events:none; }
+  .cross::before,.cross::after{ content:""; position:absolute; background:rgba(0,255,140,.6); }
+  .cross::before{ width:2px; height:20px; left:-1px; top:-10px; }
+  .cross::after { width:20px; height:2px; top:-1px; left:-10px; }
+
+  #hud {
+    position:fixed; left:10px; top:10px; z-index:3;
+    background:rgba(0,0,0,.5); backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,.12); border-radius:12px;
+    padding:7px 10px; font-size:11px; line-height:1.45;
+    display:grid; grid-template-columns:auto 1fr; gap:1px 9px;
+  }
+  #hud .k{ color:#8be9c4; font-weight:600; }
+  #hud .v{ font-variant-numeric:tabular-nums; }
+  .ok{color:#5cff9e}.err{color:#ff6b6b}.warn{color:#ffd166}
+
+  /* panel de controles */
+  #panel {
+    position:fixed; left:10px; right:10px; bottom:12px; z-index:4;
+    background:rgba(0,0,0,.58); backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,.12); border-radius:16px;
+    padding:12px 14px; display:flex; flex-direction:column; gap:10px;
+  }
+  .row { display:flex; align-items:center; gap:10px; }
+  .row label { font-size:12px; color:#cde; min-width:78px; }
+  input[type=range]{ flex:1; accent-color:#5cff9e; height:26px; }
+  .val { font-size:12px; color:#8be9c4; width:42px; text-align:right; font-variant-numeric:tabular-nums; }
+  .btns { display:flex; gap:8px; }
+  .btn {
+    flex:1; padding:12px; font-size:14px; font-weight:700; border:none; border-radius:22px;
+    color:#04140d; background:#5cff9e;
+  }
+  .btn.sec { background:rgba(255,255,255,.14); color:#fff; }
+  .btn:active{ transform:scale(.97); }
+  .toggle { display:flex; align-items:center; gap:6px; font-size:12px; color:#cde; }
+  .toggle input{ width:18px; height:18px; accent-color:#5cff9e; }
+  #file { display:none; }
+
+  #toast {
+    position:fixed; bottom:170px; left:50%; transform:translateX(-50%); z-index:5;
+    background:rgba(0,0,0,.75); border-radius:20px; padding:8px 16px; font-size:13px;
+    opacity:0; transition:opacity .25s; pointer-events:none; text-align:center;
+  }
+  #toast.show{ opacity:1; }
+
+  #start {
+    position:fixed; inset:0; z-index:20;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:16px; background:radial-gradient(circle at 50% 40%,#10261f,#000); text-align:center; padding:24px;
+  }
+  #start h1{ font-size:21px; } #start p{ font-size:14px; color:#9aa; max-width:310px; }
+  #start button{
+    margin-top:6px; padding:14px 30px; font-size:16px; font-weight:700; color:#04140d;
+    background:#5cff9e; border:none; border-radius:30px; box-shadow:0 6px 24px rgba(92,255,158,.35);
+  }
+  #start button:active{ transform:scale(.97); }
+  .hidden{ display:none!important; }
+</style>
+</head>
+<body>
+
+  <div id="cam-wrap"></div>
+  <div style="position:fixed;top:10px;right:10px;z-index:6;background:rgba(0,0,0,.5);padding:3px 8px;border-radius:8px;font-size:11px;color:#5cff9e">v5</div>
+  <video id="cam" autoplay playsinline muted></video>
+  <canvas id="gl"></canvas>
+  <div class="cross"></div>
+
+  <div id="hud">
+    <span class="k">Camara</span><span class="v" id="s-cam">-</span>
+    <span class="k">GPS</span><span class="v" id="s-gps">-</span>
+    <span class="k">Brujula</span><span class="v" id="s-head">-</span>
+    <span class="k">Dist</span><span class="v" id="s-dist">-</span>
+    <span class="k">Luz env</span><span class="v" id="s-env">-</span>
+  </div>
+
+  <div id="toast"></div>
+
+  <div id="panel" class="hidden">
+    <div class="row">
+      <label>Transparencia</label>
+      <input type="range" id="opacity" min="0" max="100" value="85">
+      <span class="val" id="opacityVal">85%</span>
+    </div>
+    <div class="row" style="justify-content:space-between">
+      <span class="toggle"><input type="checkbox" id="envOn" checked> Luz del entorno</span>
+      <span class="toggle"><input type="checkbox" id="faceCam"> Mirar camara</span>
+    </div>
+    <div class="btns">
+      <button class="btn" id="drop">Reubicar aca</button>
+      <button class="btn sec" id="loadBtn">Cargar modelo</button>
+    </div>
+    <input type="file" id="file">
+  </div>
+
+  <div id="start">
+    <h1>&#128123; AR Objeto</h1>
+    <p>Objeto anclado al espacio, con luz del entorno, transparencia y carga de tus modelos (GLB / OBJ / STL).</p>
+    <button id="startBtn">Iniciar</button>
+    <p style="font-size:12px;color:#667">Requiere HTTPS. Aceta camara, ubicacion y movimiento.</p>
+  </div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/STLLoader.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const set = (id,t,c)=>{ const e=$(id); e.textContent=t; e.className='v'+(c?' '+c:''); };
+const DEG = Math.PI/180;
+const FLOOR = -1.6;           // piso asumido, 1.6 m bajo el ojo
+const toast = m => { const t=$('toast'); t.textContent=m; t.classList.add('show'); setTimeout(()=>t.classList.remove('show'),1200); };
+
+/* ============ CAMARA ============ */
+async function initCamera(){
+  set('s-cam','iniciando...','warn');
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:{ ideal:'environment' } }, audio:false });
+    $('cam').srcObject = stream;
+    set('s-cam','OK','ok');
+  }catch(e){ set('s-cam', e.name,'err'); }
+}
+
+/* ============ THREE ============ */
+let renderer, scene, camera, holder, currentObj, usingGhost=true;
+let ambient, keyLight;
+let materials = [];
+const anchor = new THREE.Vector3(0,0,-3);
+const camPos = new THREE.Vector3(0,0,0);
+const targetPos = new THREE.Vector3(0,0,0);
+
+function buildGhost(){
+  const g = new THREE.Group();
+  const pts = [
+    new THREE.Vector2(0.00,0.00), new THREE.Vector2(0.46,0.02),
+    new THREE.Vector2(0.50,0.40), new THREE.Vector2(0.50,0.95),
+    new THREE.Vector2(0.42,1.30), new THREE.Vector2(0.26,1.55),
+    new THREE.Vector2(0.00,1.62),
+  ];
+  const mat = new THREE.MeshStandardMaterial({
+    color:0xffffff, emissive:0x223355, emissiveIntensity:0.35,
+    transparent:true, opacity:0.85, side:THREE.DoubleSide, roughness:0.9, metalness:0
+  });
+  g.add(new THREE.Mesh(new THREE.LatheGeometry(pts,40), mat));
+  const dark = new THREE.MeshBasicMaterial({ color:0x0a0a1a });
+  const eyeGeo = new THREE.SphereGeometry(0.09,16,16);
+  const eL=new THREE.Mesh(eyeGeo,dark); eL.position.set(-0.16,1.15,0.44); g.add(eL);
+  const eR=new THREE.Mesh(eyeGeo,dark); eR.position.set(0.16,1.15,0.44); g.add(eR);
+  const mo=new THREE.Mesh(new THREE.SphereGeometry(0.08,16,16),dark); mo.position.set(0,0.92,0.46); mo.scale.set(1,1.3,0.6); g.add(mo);
+  g.position.y = -0.8;             // centra el fantasma en el holder
+  const wrap = new THREE.Group(); wrap.add(g);
+  return wrap;
+}
+
+function collectMaterials(obj){
+  materials = [];
+  obj.traverse(o=>{ if(o.isMesh && o.material){
+    (Array.isArray(o.material)?o.material:[o.material]).forEach(m=>materials.push(m));
+  }});
+  applyOpacity(+$('opacity').value/100);
+}
+
+function normalize(obj){
+  // escala a ~1.6 m de alto y apoya la base en y=0
+  let box=new THREE.Box3().setFromObject(obj), size=new THREE.Vector3(); box.getSize(size);
+  const s = 1.6/(Math.max(size.x,size.y,size.z)||1); obj.scale.setScalar(s);
+  box=new THREE.Box3().setFromObject(obj);
+  const c=new THREE.Vector3(); box.getCenter(c);
+  obj.position.x -= c.x; obj.position.z -= c.z; obj.position.y -= box.min.y;
+}
+
+function setObject(obj, isGhost){
+  if(currentObj) holder.remove(currentObj);
+  currentObj = obj; usingGhost = !!isGhost;
+  holder.add(obj);
+  collectMaterials(obj);
+  anchor.y = usingGhost ? 0 : FLOOR;   // ghost flota, modelos al piso
+}
+
+function initThree(){
+  renderer = new THREE.WebGLRenderer({ canvas:$('gl'), alpha:true, antialias:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(72, innerWidth/innerHeight, 0.1, 1000);
+
+  ambient = new THREE.AmbientLight(0xffffff, 0.9); scene.add(ambient);
+  keyLight = new THREE.DirectionalLight(0xffffff, 0.6); keyLight.position.set(0.3,1,0.4); scene.add(keyLight);
+
+  holder = new THREE.Group(); scene.add(holder);
+  setObject(buildGhost(), true);
+
+  addEventListener('resize', onResize);
+  animate();
+}
+function onResize(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight); }
+
+/* ---- orientacion -> camara ---- */
+let devOri=null;
+const zee=new THREE.Vector3(0,0,1), q0=new THREE.Quaternion();
+const q1=new THREE.Quaternion(-Math.sqrt(0.5),0,0,Math.sqrt(0.5)), euler=new THREE.Euler();
+const scrOri = ()=>(((screen.orientation&&screen.orientation.angle)||window.orientation||0))*DEG;
+function applyDeviceQuat(){
+  if(!devOri) return;
+  const a=(devOri.alpha||0)*DEG,b=(devOri.beta||0)*DEG,g=(devOri.gamma||0)*DEG,o=scrOri();
+  euler.set(b,a,-g,'YXZ');
+  camera.quaternion.setFromEuler(euler);
+  camera.quaternion.multiply(q1);
+  camera.quaternion.multiply(q0.setFromAxisAngle(zee,-o));
+}
+function onOrient(e){
+  devOri=e;
+  let h=(typeof e.webkitCompassHeading==='number')?e.webkitCompassHeading:(e.absolute&&e.alpha!=null)?360-e.alpha:null;
+  if(h!=null) set('s-head', Math.round(h)+'\u00b0','ok');
+}
+
+/* ---- GPS -> traslacion ---- */
+let origin=null;
+function initGPS(){
+  set('s-gps','buscando...','warn');
+  if(!navigator.geolocation){ set('s-gps','no soportado','err'); return; }
+  navigator.geolocation.watchPosition(p=>{
+    const c=p.coords;
+    if(!origin) origin={lat:c.latitude,lon:c.longitude};
+    const north=(c.latitude-origin.lat)*111320;
+    const east=(c.longitude-origin.lon)*111320*Math.cos(origin.lat*DEG);
+    targetPos.set(east,0,-north);
+    set('s-gps','\u00b1'+Math.round(c.accuracy)+' m', c.accuracy<25?'ok':'warn');
+  }, err=>set('s-gps',err.message,'err'), { enableHighAccuracy:true, maximumAge:0, timeout:15000 });
+}
+
+/* ---- LUZ DEL ENTORNO: muestrea color/brillo de la camara ---- */
+const envCv=document.createElement('canvas'); envCv.width=24; envCv.height=24;
+const ectx=envCv.getContext('2d',{willReadFrequently:true});
+let envFrame=0;
+function sampleEnv(){
+  const v=$('cam'); if(v.readyState<2){ return; }
+  try{
+    ectx.drawImage(v,0,0,24,24);
+    const d=ectx.getImageData(0,0,24,24).data;
+    let r=0,g=0,b=0,tl=0,tn=0;
+    for(let y=0;y<24;y++)for(let x=0;x<24;x++){
+      const i=(y*24+x)*4; r+=d[i]; g+=d[i+1]; b+=d[i+2];
+      if(y<12){ tl+=0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]; tn++; }
+    }
+    const n=576; r/=n; g/=n; b/=n;
+    const lum=(0.299*r+0.587*g+0.114*b)/255;
+    const topLum=(tl/tn)/255;
+    // ambient toma el tinte del entorno; intensidad segun brillo
+    ambient.color.setRGB(0.6+0.4*r/255, 0.6+0.4*g/255, 0.6+0.4*b/255);
+    ambient.intensity = 0.35 + lum*1.15;
+    // luz principal desde arriba, color e intensidad del techo/cielo
+    keyLight.color.setRGB(0.7+0.3*r/255, 0.7+0.3*g/255, 0.7+0.3*b/255);
+    keyLight.intensity = 0.15 + topLum*1.0;
+    set('s-env', Math.round(lum*100)+'%','ok');
+  }catch(e){ set('s-env','n/d','warn'); }
+}
+
+/* ---- opacidad ---- */
+function applyOpacity(v){
+  materials.forEach(m=>{ m.transparent = v<0.999; m.opacity=v; m.needsUpdate=true; });
+}
+
+/* ---- reubicar ---- */
+function dropObject(){
+  const fwd=new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+  fwd.y=0; if(fwd.lengthSq()<1e-6) fwd.set(0,0,-1); fwd.normalize();
+  anchor.copy(camPos).addScaledVector(fwd,3);
+  anchor.y = usingGhost ? 0 : FLOOR;
+  toast('Objeto reubicado');
+}
+
+/* ---- cargar modelo ---- */
+function loadModel(file){
+  const url=URL.createObjectURL(file);
+  const ext=file.name.split('.').pop().toLowerCase();
+  toast('Cargando '+file.name+'...');
+  const onErr=e=>{ console.error(e); toast('Error al cargar el modelo'); };
+  const place=obj=>{ normalize(obj); setObject(obj,false); dropObject(); toast('Modelo cargado'); URL.revokeObjectURL(url); };
+
+  try{
+    if(ext==='glb'||ext==='gltf'){
+      new THREE.GLTFLoader().load(url, g=>place(g.scene), null, onErr);
+    } else if(ext==='obj'){
+      new THREE.OBJLoader().load(url, o=>{
+        o.traverse(m=>{ if(m.isMesh && (!m.material||!m.material.isMeshStandardMaterial))
+          m.material=new THREE.MeshStandardMaterial({color:0xcccccc, roughness:0.8}); });
+        place(o);
+      }, null, onErr);
+    } else if(ext==='stl'){
+      new THREE.STLLoader().load(url, geo=>{
+        geo.computeVertexNormals();
+        const mesh=new THREE.Mesh(geo, new THREE.MeshStandardMaterial({color:0xbfc4cc, roughness:0.6, metalness:0.1}));
+        place(mesh);
+      }, null, onErr);
+    } else { toast('Formato no soportado'); }
+  }catch(e){ onErr(e); }
+}
+
+/* ---- loop ---- */
+function animate(t){
+  requestAnimationFrame(animate);
+  camPos.lerp(targetPos,0.06); camera.position.copy(camPos);
+  applyDeviceQuat();
+
+  if($('envOn').checked && (++envFrame%6===0)) sampleEnv();
+
+  const bob = usingGhost ? Math.sin(t*0.002)*0.12 : 0;
+  holder.position.set(anchor.x, anchor.y+bob, anchor.z);
+  if(usingGhost || $('faceCam').checked){
+    holder.lookAt(new THREE.Vector3(camera.position.x, holder.position.y, camera.position.z));
+  } else { holder.rotation.set(0,0,0); }
+
+  set('s-dist', camera.position.distanceTo(holder.position).toFixed(1)+' m');
+  renderer.render(scene,camera);
+}
+
+/* ============ UI ============ */
+$('opacity').addEventListener('input', e=>{ const v=+e.target.value; $('opacityVal').textContent=v+'%'; applyOpacity(v/100); });
+$('drop').addEventListener('click', dropObject);
+$('loadBtn').addEventListener('click', ()=>$('file').click());
+$('file').addEventListener('change', e=>{ if(e.target.files[0]) loadModel(e.target.files[0]); });
+
+$('startBtn').addEventListener('click', async ()=>{
+  $('start').classList.add('hidden');
+  $('panel').classList.remove('hidden');
+  await initCamera();
+  initThree();
+  initGPS();
+  try{
+    if(typeof DeviceOrientationEvent!=='undefined' && typeof DeviceOrientationEvent.requestPermission==='function'){
+      const r=await DeviceOrientationEvent.requestPermission();
+      if(r==='granted') addEventListener('deviceorientation', onOrient); else set('s-head','denegado','err');
+    } else if('ondeviceorientationabsolute' in window){ addEventListener('deviceorientationabsolute', onOrient); }
+    else { addEventListener('deviceorientation', onOrient); }
+  }catch(e){ set('s-head', e.message,'err'); }
+});
+</script>
+</body>
+</html>
